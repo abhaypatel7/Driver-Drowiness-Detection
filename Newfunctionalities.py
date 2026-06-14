@@ -192,6 +192,36 @@ def draw_eye(frame, lms, indices, color):
     pts = np.array([lms[i] for i in indices], dtype=np.int32)
     cv2.polylines(frame, [pts], True, color, 1)
 
+def get_brightness(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return np.mean(gray)
+
+def enhance_low_light(frame):
+    gamma = 2.5
+
+    inv_gamma = 1.0 / gamma
+
+    table = np.array([
+        ((i / 255.0) ** inv_gamma) * 255
+        for i in np.arange(256)
+    ]).astype("uint8")
+
+    bright = cv2.LUT(frame, table)
+
+    gray = cv2.cvtColor(bright, cv2.COLOR_BGR2GRAY)
+
+    clahe = cv2.createCLAHE(
+        clipLimit=3.0,
+        tileGridSize=(8,8)
+    )
+
+    enhanced = clahe.apply(gray)
+
+    return cv2.cvtColor(
+        enhanced,
+        cv2.COLOR_GRAY2BGR
+    )
+
 # ─── Phone detection helpers ──────────────────────────────────────
 def face_center(lms, w, h):
     """Return pixel center of face using nose tip landmark."""
@@ -308,6 +338,9 @@ def calibrate(cap, landmarker, K, n=CALIB_FRAMES):
         if not ret:
             continue
         frame  = cv2.resize(frame, (640, 480))
+        brightness = get_brightness(frame)
+        if brightness < 40:
+            frame = enhance_low_light(frame)
         h, w   = frame.shape[:2]
         rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_img = Image(image_format=ImageFormat.SRGB, data=rgb)
@@ -341,6 +374,17 @@ def calibrate(cap, landmarker, K, n=CALIB_FRAMES):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (150,200,255), 1)
             if l > BLINK_FILTER: le.append(l)
             if r > BLINK_FILTER: re.append(r)
+
+        if brightness < 25:
+            cv2.putText(
+            frame,
+            "LOW LIGHT - MONITORING ACCURACY MAY DECREASE",
+            (60,210),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0,0,255),
+            2
+    )
 
         cv2.imshow("Drowsiness Monitor", frame)
         cv2.waitKey(1)
@@ -418,6 +462,7 @@ def main(driver_name="Driver"):
             continue
 
         frame  = cv2.resize(frame, (640, 480))
+        brightness = get_brightness(frame)
         rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_img = Image(image_format=ImageFormat.SRGB, data=rgb)
         res    = landmarker.detect(mp_img)
@@ -463,6 +508,7 @@ def main(driver_name="Driver"):
                 distracted = True
 
             # ── HUD ───────────────────────────────────────────────
+            brightness = get_brightness(frame)
             cv2.putText(frame, f"L-EAR:{l_ear:.3f} thr:{lt:.3f}",
                         (10,25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, lc, 2)
             cv2.putText(frame, f"R-EAR:{r_ear:.3f} thr:{rt:.3f}",
@@ -473,6 +519,39 @@ def main(driver_name="Driver"):
             cv2.putText(frame, f"Yaw:{yaw:+.1f}deg  {direction}",
                         (10,100), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                         (0,0,255) if distracted else (0,220,0), 2)
+            cv2.putText(frame, f"Brightness:{brightness:.0f}",
+                        (10,125), cv2.FONT_HERSHEY_SIMPLEX,0.55,(255,255,255),2)
+            if brightness > 120:
+                light_status = "LIGHTING: GOOD"
+                light_color = (0,255,0)
+
+            elif brightness > 40:
+                light_status = "LIGHTING: LOW"
+                light_color = (0,255,255)
+
+            else:
+                light_status = "LIGHTING: POOR"
+                light_color = (0,0,255)
+
+            cv2.putText(
+                frame,
+                light_status,
+                (10,150),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                light_color,
+                2
+            )
+            if brightness < 25:
+                cv2.putText(
+                    frame,
+                    "LOW LIGHT - MONITORING ACCURACY MAY DECREASE",
+                    (60,180),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0,0,255),
+                    2
+                )
             cv2.putText(frame, f"Driver: {driver_name}", 
                         (430, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6,(255, 255, 255), 2)
             
