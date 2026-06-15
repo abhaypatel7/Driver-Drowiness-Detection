@@ -52,5 +52,33 @@
       42.0,
       13.6
     ]
+  },
+  "Abhi": {
+    "left_thresh": 0.2861,
+    "right_thresh": 0.2489,
+    "left_baseline": 0.3815,
+    "right_baseline": 0.3319,
+    "left_eye_size": [
+      42.0,
+      16.0
+    ],
+    "right_eye_size": [
+      50.8,
+      16.9
+    ]
+  },
+  "ABHAY": {
+    "left_thresh": 0.2479,
+    "right_thresh": 0.2299,
+    "left_baseline": 0.3305,
+    "right_baseline": 0.3065,
+    "left_eye_size": [
+      30.8,
+      10.2
+    ],
+    "right_eye_size": [
+      34.0,
+      10.4
+    ]
   }
 }

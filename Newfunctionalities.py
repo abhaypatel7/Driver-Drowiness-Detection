@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import urllib.request
+from collections import deque
 from scipy.spatial import distance
 from pygame import mixer
 import mediapipe as mp
@@ -438,6 +439,17 @@ def main(driver_name="Driver"):
     # ── Phone detection state ──────────────────────────────────────
     phone_start_time   = None   # when continuous phone use began
     phone_alert_shown  = False  # is alert currently on screen
+    perclos = 0.0
+    perclos_status = "CALIBRATING"
+    perclos_color = (255,255,255)
+    perclos_warning = ""
+    # ===== PERCLOS =====
+    PERCLOS_SECONDS = 120
+    FPS_ESTIMATE = 30
+
+    perclos_window = deque(
+        maxlen=PERCLOS_SECONDS * FPS_ESTIMATE
+    )
     phone_last_alert   = 0.0    # timestamp of last alert (for cooldown)
 
     # ── Load or calibrate profile ──────────────────────────────────
@@ -482,6 +494,26 @@ def main(driver_name="Driver"):
             l_ear = ear(lms, LEFT_EYE_IDX)
             r_ear = ear(lms, RIGHT_EYE_IDX)
 
+                        # ===== PERCLOS =====
+
+            eyes_closed = (
+                l_ear < lt and
+                r_ear < rt
+            )
+
+            perclos_window.append(
+                1 if eyes_closed else 0
+            )
+
+            if len(perclos_window) > 0:
+                perclos = (
+                    sum(perclos_window)
+                    /
+                    len(perclos_window)
+                ) * 100
+            else:
+                perclos = 0.0
+
             lc = (0,255,0) if l_ear >= lt else (0,0,255)
             rc = (0,255,0) if r_ear >= rt else (0,0,255)
             draw_eye(frame, lms, LEFT_EYE_IDX,  lc)
@@ -521,6 +553,94 @@ def main(driver_name="Driver"):
                         (0,0,255) if distracted else (0,220,0), 2)
             cv2.putText(frame, f"Brightness:{brightness:.0f}",
                         (10,125), cv2.FONT_HERSHEY_SIMPLEX,0.55,(255,255,255),2)
+            cv2.putText(
+                frame,
+                f"PERCLOS:{perclos:.1f}%",
+                (10,175),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255,255,255),
+                2
+            )
+            cv2.putText(
+                frame,
+                f"STATUS:{perclos_status}",
+                (10,225),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                perclos_color,
+                2
+            )
+
+            if perclos_warning:
+
+                cv2.putText(
+                    frame,
+                    perclos_warning,
+                    (120,260),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0,0,255),
+                    2
+                )
+            window_fill = (
+                len(perclos_window)
+                /
+                perclos_window.maxlen
+            ) * 100
+
+            if window_fill < 100:
+
+                perclos_status = "CALIBRATING"
+                perclos_color = (255,255,255)
+
+            else:
+
+                if perclos < 10:
+
+                    perclos_status = "ALERT"
+                    perclos_color = (0,255,0)
+
+                elif perclos < 20:
+
+                    perclos_status = "FATIGUE"
+                    perclos_color = (0,255,255)
+
+                elif perclos < 30:
+
+                    perclos_status = "DROWSY"
+                    perclos_color = (0,165,255)
+
+                else:
+
+                    perclos_status = "HIGH RISK"
+                    perclos_color = (0,0,255)
+
+            perclos_warning = ""
+
+            if window_fill >= 100:
+
+                if perclos >= 30:
+
+                    perclos_warning = "TAKE A BREAK IMMEDIATELY"
+
+                elif perclos >= 20:
+
+                    perclos_warning = "DRIVER SHOWING DROWSINESS"
+
+                elif perclos >= 10:
+
+                    perclos_warning = "FATIGUE DETECTED"
+
+            cv2.putText(
+                frame,
+                f"Window:{window_fill:.0f}%",
+                (10,200),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255,255,255),
+                2
+            )
             if brightness > 120:
                 light_status = "LIGHTING: GOOD"
                 light_color = (0,255,0)
