@@ -46,5 +46,19 @@
       25.8,
       7.9
     ]
+  },
+  "Jony": {
+    "left_thresh": 0.2458,
+    "right_thresh": 0.217,
+    "left_baseline": 0.3277,
+    "right_baseline": 0.2893,
+    "left_eye_size": [
+      44.8,
+      14.5
+    ],
+    "right_eye_size": [
+      49.2,
+      13.8
+    ]
   }
 }
