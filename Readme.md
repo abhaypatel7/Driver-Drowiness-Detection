@@ -18,7 +18,7 @@ The safety output. Triggers audio + visual alert when eyes stay closed too long.
 Real-time feedback so you can see exactly what the system is measuring.
 
 **Current Functionalities**
-1> Eye Aspect Ratio (EAR) — measures eye openness using facial landmarks
+1> Eye Aspect Ratio (EAR) — measures eye openness using facial landmarks 
 2> Drowsiness detection — triggers alert after consecutive closed-eye frames
 3> Audio alert — plays music.wav when drowsiness detected
 4> Visual alert — red ALERT text on screen
@@ -28,11 +28,12 @@ Real-time feedback so you can see exactly what the system is measuring.
 8> Per-eye size measurement — measures actual pixel size of each eye during calibration
 9> Alert if either eye drowsy — triggers if left OR right eye closes
 10> Auto calibration phase — collects 100 frames of open-eye data on startup
-11> Auto threshold calculation — threshold = baseline EAR × 0.75
+---11> Auto threshold calculation — threshold = baseline EAR × 0.75
 12> Blink filter — ignores blinks during calibration for clean baseline
 13> Progress bar — shows calibration progress on screen
 14> Live EAR display — shows real-time EAR values during calibration
 15> Safety clamp — keeps threshold between 0.18–0.32 to prevent bad calibration
+
 16> Save driver profile — press [S] to save calibration to JSON
 17> Load driver profile — automatically loads saved profile on startup
 18> Multiple driver support — each driver saved separately by name

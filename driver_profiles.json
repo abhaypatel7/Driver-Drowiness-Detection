@@ -32,5 +32,19 @@
       21.9,
       7.9
     ]
+  },
+  "aaa": {
+    "left_thresh": 0.1966,
+    "right_thresh": 0.1965,
+    "left_baseline": 0.2621,
+    "right_baseline": 0.262,
+    "left_eye_size": [
+      25.6,
+      7.7
+    ],
+    "right_eye_size": [
+      25.8,
+      7.9
+    ]
   }
 }
