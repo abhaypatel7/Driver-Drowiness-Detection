@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import urllib.request
+from collections import deque
 from scipy.spatial import distance
 from pygame import mixer
 import mediapipe as mp
@@ -148,6 +149,18 @@ def ear(lms, indices):
     C = distance.euclidean(pts[0], pts[3])
     return (A + B) / (2.0 * C)
 
+def eye_size(lms, indices):
+    pts = np.array([lms[i] for i in indices], dtype=np.float64)
+
+    width = distance.euclidean(pts[0], pts[3])
+
+    height1 = distance.euclidean(pts[1], pts[5])
+    height2 = distance.euclidean(pts[2], pts[4])
+
+    height = (height1 + height2) / 2
+
+    return round(width,1), round(height,1)
+
 def mar(lms):
     pts = np.array([lms[i] for i in MOUTH_IDX], dtype=np.float64)
     A = distance.euclidean(pts[0], pts[1])
@@ -179,6 +192,36 @@ def clamp_thr(v):
 def draw_eye(frame, lms, indices, color):
     pts = np.array([lms[i] for i in indices], dtype=np.int32)
     cv2.polylines(frame, [pts], True, color, 1)
+
+def get_brightness(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return np.mean(gray)
+
+def enhance_low_light(frame):
+    gamma = 2.5
+
+    inv_gamma = 1.0 / gamma
+
+    table = np.array([
+        ((i / 255.0) ** inv_gamma) * 255
+        for i in np.arange(256)
+    ]).astype("uint8")
+
+    bright = cv2.LUT(frame, table)
+
+    gray = cv2.cvtColor(bright, cv2.COLOR_BGR2GRAY)
+
+    clahe = cv2.createCLAHE(
+        clipLimit=3.0,
+        tileGridSize=(8,8)
+    )
+
+    enhanced = clahe.apply(gray)
+
+    return cv2.cvtColor(
+        enhanced,
+        cv2.COLOR_GRAY2BGR
+    )
 
 # ─── Phone detection helpers ──────────────────────────────────────
 def face_center(lms, w, h):
@@ -259,10 +302,25 @@ def load_profiles():
             return json.load(f)
     return {}
 
-def save_profile(name, lt, rt, lb, rb):
+def save_profile(name, lt, rt, lb, rb, left_eye_size, right_eye_size):
     p = load_profiles()
-    p[name] = {"left_thresh": round(lt,4), "right_thresh": round(rt,4),
-               "left_baseline": round(lb,4), "right_baseline": round(rb,4)}
+    p[name] = {
+    "left_thresh": round(lt,4),
+    "right_thresh": round(rt,4),
+
+    "left_baseline": round(lb,4),
+    "right_baseline": round(rb,4),
+
+    "left_eye_size": [
+        round(float(left_eye_size[0]),1),
+        round(float(left_eye_size[1]),1)
+    ],
+
+    "right_eye_size": [
+        round(float(right_eye_size[0]),1),
+        round(float(right_eye_size[1]),1)
+    ]
+}
     with open(PROFILES_FILE, "w") as f:
         json.dump(p, f, indent=2)
     print(f"[SAVED] Profile '{name}'")
@@ -273,12 +331,17 @@ def load_profile(name):
 # ─── Calibration ──────────────────────────────────────────────────
 def calibrate(cap, landmarker, K, n=CALIB_FRAMES):
     le, re = [], []
+    left_sizes = []
+    right_sizes = []
     print("[CALIBRATION] Keep eyes OPEN, face the camera...")
     while True:
         ret, frame = cap.read()
         if not ret:
             continue
         frame  = cv2.resize(frame, (640, 480))
+        brightness = get_brightness(frame)
+        if brightness < 40:
+            frame = enhance_low_light(frame)
         h, w   = frame.shape[:2]
         rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_img = Image(image_format=ImageFormat.SRGB, data=rgb)
@@ -299,6 +362,11 @@ def calibrate(cap, landmarker, K, n=CALIB_FRAMES):
         if lms:
             l = ear(lms, LEFT_EYE_IDX)
             r = ear(lms, RIGHT_EYE_IDX)
+            lw, lh = eye_size(lms, LEFT_EYE_IDX)
+            rw, rh = eye_size(lms, RIGHT_EYE_IDX)
+
+            left_sizes.append((lw, lh))
+            right_sizes.append((rw, rh))
             draw_eye(frame, lms, LEFT_EYE_IDX,  (0,255,255))
             draw_eye(frame, lms, RIGHT_EYE_IDX, (0,200,255))
             cv2.putText(frame, f"Left EAR:  {l:.3f}", (10,85),
@@ -308,16 +376,29 @@ def calibrate(cap, landmarker, K, n=CALIB_FRAMES):
             if l > BLINK_FILTER: le.append(l)
             if r > BLINK_FILTER: re.append(r)
 
+        if brightness < 25:
+            cv2.putText(
+            frame,
+            "LOW LIGHT - MONITORING ACCURACY MAY DECREASE",
+            (60,210),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0,0,255),
+            2
+    )
+
         cv2.imshow("Drowsiness Monitor", frame)
         cv2.waitKey(1)
         if min(len(le), len(re)) >= n:
             break
 
     lb, rb = float(np.mean(le)), float(np.mean(re))
+    left_eye_size = np.mean(left_sizes, axis=0)
+    right_eye_size = np.mean(right_sizes, axis=0)
     lt, rt = clamp_thr(lb*THRESH_RATIO), clamp_thr(rb*THRESH_RATIO)
     print(f"[DONE] Left  baseline={lb:.4f} thresh={lt:.4f}")
     print(f"       Right baseline={rb:.4f} thresh={rt:.4f}")
-    return lt, rt, lb, rb
+    return ( lt, rt, lb, rb, left_eye_size, right_eye_size)
 
 # ─── Main ─────────────────────────────────────────────────────────
 def main(driver_name="Driver"):
@@ -358,6 +439,17 @@ def main(driver_name="Driver"):
     # ── Phone detection state ──────────────────────────────────────
     phone_start_time   = None   # when continuous phone use began
     phone_alert_shown  = False  # is alert currently on screen
+    perclos = 0.0
+    perclos_status = "CALIBRATING"
+    perclos_color = (255,255,255)
+    perclos_warning = ""
+    # ===== PERCLOS =====
+    PERCLOS_SECONDS = 120
+    FPS_ESTIMATE = 30
+
+    perclos_window = deque(
+        maxlen=PERCLOS_SECONDS * FPS_ESTIMATE
+    )
     phone_last_alert   = 0.0    # timestamp of last alert (for cooldown)
 
     # ── Load or calibrate profile ──────────────────────────────────
@@ -368,9 +460,11 @@ def main(driver_name="Driver"):
         rt = profile["right_thresh"]
         lb = profile["left_baseline"]
         rb = profile["right_baseline"]
+        left_eye_size = profile.get("left_eye_size",[0,0])
+        right_eye_size = profile.get("right_eye_size",[0,0])
     else:
         print(f"[INFO] No profile for '{driver_name}' — calibrating...")
-        lt, rt, lb, rb = calibrate(cap, landmarker, K)
+        (lt, rt, lb, rb,left_eye_size, right_eye_size) = calibrate(cap, landmarker, K)
 
     print("\n[RUNNING] Q=quit  S=save  R=recalibrate\n")
 
@@ -380,6 +474,7 @@ def main(driver_name="Driver"):
             continue
 
         frame  = cv2.resize(frame, (640, 480))
+        brightness = get_brightness(frame)
         rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_img = Image(image_format=ImageFormat.SRGB, data=rgb)
         res    = landmarker.detect(mp_img)
@@ -398,6 +493,26 @@ def main(driver_name="Driver"):
             # ── EAR ───────────────────────────────────────────────
             l_ear = ear(lms, LEFT_EYE_IDX)
             r_ear = ear(lms, RIGHT_EYE_IDX)
+
+                        # ===== PERCLOS =====
+
+            eyes_closed = (
+                l_ear < lt and
+                r_ear < rt
+            )
+
+            perclos_window.append(
+                1 if eyes_closed else 0
+            )
+
+            if len(perclos_window) > 0:
+                perclos = (
+                    sum(perclos_window)
+                    /
+                    len(perclos_window)
+                ) * 100
+            else:
+                perclos = 0.0
 
             lc = (0,255,0) if l_ear >= lt else (0,0,255)
             rc = (0,255,0) if r_ear >= rt else (0,0,255)
@@ -425,6 +540,7 @@ def main(driver_name="Driver"):
                 distracted = True
 
             # ── HUD ───────────────────────────────────────────────
+            brightness = get_brightness(frame)
             cv2.putText(frame, f"L-EAR:{l_ear:.3f} thr:{lt:.3f}",
                         (10,25), cv2.FONT_HERSHEY_SIMPLEX, 0.55, lc, 2)
             cv2.putText(frame, f"R-EAR:{r_ear:.3f} thr:{rt:.3f}",
@@ -435,6 +551,135 @@ def main(driver_name="Driver"):
             cv2.putText(frame, f"Yaw:{yaw:+.1f}deg  {direction}",
                         (10,100), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                         (0,0,255) if distracted else (0,220,0), 2)
+            cv2.putText(frame, f"Brightness:{brightness:.0f}",
+                        (10,125), cv2.FONT_HERSHEY_SIMPLEX,0.55,(255,255,255),2)
+            cv2.putText(
+                frame,
+                f"PERCLOS:{perclos:.1f}%",
+                (10,175),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255,255,255),
+                2
+            )
+            cv2.putText(
+                frame,
+                f"STATUS:{perclos_status}",
+                (10,225),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                perclos_color,
+                2
+            )
+
+            if perclos_warning:
+
+                cv2.putText(
+                    frame,
+                    perclos_warning,
+                    (120,260),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0,0,255),
+                    2
+                )
+            window_fill = (
+                len(perclos_window)
+                /
+                perclos_window.maxlen
+            ) * 100
+
+            if window_fill < 100:
+
+                perclos_status = "CALIBRATING"
+                perclos_color = (255,255,255)
+
+            else:
+
+                if perclos < 10:
+
+                    perclos_status = "ALERT"
+                    perclos_color = (0,255,0)
+
+                elif perclos < 20:
+
+                    perclos_status = "FATIGUE"
+                    perclos_color = (0,255,255)
+
+                elif perclos < 30:
+
+                    perclos_status = "DROWSY"
+                    perclos_color = (0,165,255)
+
+                else:
+
+                    perclos_status = "HIGH RISK"
+                    perclos_color = (0,0,255)
+
+            perclos_warning = ""
+
+            if window_fill >= 100:
+
+                if perclos >= 30:
+
+                    perclos_warning = "TAKE A BREAK IMMEDIATELY"
+
+                elif perclos >= 20:
+
+                    perclos_warning = "DRIVER SHOWING DROWSINESS"
+
+                elif perclos >= 10:
+
+                    perclos_warning = "FATIGUE DETECTED"
+
+            cv2.putText(
+                frame,
+                f"Window:{window_fill:.0f}%",
+                (10,200),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255,255,255),
+                2
+            )
+            if brightness > 120:
+                light_status = "LIGHTING: GOOD"
+                light_color = (0,255,0)
+
+            elif brightness > 40:
+                light_status = "LIGHTING: LOW"
+                light_color = (0,255,255)
+
+            else:
+                light_status = "LIGHTING: POOR"
+                light_color = (0,0,255)
+
+            cv2.putText(
+                frame,
+                light_status,
+                (10,150),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                light_color,
+                2
+            )
+            if brightness < 25:
+                cv2.putText(
+                    frame,
+                    "LOW LIGHT - MONITORING ACCURACY MAY DECREASE",
+                    (60,180),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0,0,255),
+                    2
+                )
+            cv2.putText(frame, f"Driver: {driver_name}", 
+                        (430, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6,(255, 255, 255), 2)
+            
+            cv2.putText( frame, f"L Eye:{left_eye_size[0]:.1f}x{left_eye_size[1]:.1f}",
+                        (400,55),cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1 )
+            
+            cv2.putText( frame, f"R Eye:{right_eye_size[0]:.1f}x{right_eye_size[1]:.1f}",
+                        (400,75), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1)
 
         # ── Phone detection (dual method) ──────────────────────────
         hand_close, hand_centroid = hand_near_face(hand_result, lms, w, h)
@@ -514,9 +759,9 @@ def main(driver_name="Driver"):
         if key == ord("q"):
             break
         elif key == ord("s"):
-            save_profile(driver_name, lt, rt, lb, rb)
+            save_profile(driver_name, lt, rt, lb, rb, left_eye_size, right_eye_size)
         elif key == ord("r"):
-            lt, rt, lb, rb = calibrate(cap, landmarker, K)
+            lt, rt, lb, rb, left_eye_size, right_eye_size = calibrate(cap, landmarker, K)
             flag = distract_flag = yawn_flag = yawn_cooldown = 0
             phone_start_time = None
             phone_alert_shown = False
@@ -527,5 +772,10 @@ def main(driver_name="Driver"):
     landmarker.close()
     del hands_model
 
-# ─── Run ──────────────────────────────────────────────────────────
-main(driver_name="Driver")
+# ─── Driver ──────────────────────────────────────────────────────────
+if len(sys.argv) > 1:
+    driver_name = sys.argv[1]
+else:
+    driver_name = "Driver"
+
+main(driver_name)
